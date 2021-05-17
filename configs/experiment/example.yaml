@@ -1,0 +1,8 @@
+# @package experiment
+name: "example"
+trainer_args:
+  max_epochs: 5
+dataset:
+  _target_: data.ExampleDataModule
+  data_root: ${experiment.data_root}
+  batch_size: 64
