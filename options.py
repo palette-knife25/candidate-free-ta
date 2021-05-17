@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from omegaconf import MISSING
 from hydra.core.config_store import ConfigStore
 
@@ -15,7 +15,7 @@ class ExperimentConfig:
     dataset: Any = defaulter({})
     optimizer: str = 'Adam'
     optimizer_args: Any = defaulter({'lr': 0.001})
-    scheduler: str = 'ExponentialLR'
+    scheduler: Optional[str] = 'ExponentialLR'
     scheduler_args: Any = defaulter({'gamma': 0.95})
 
 @dataclass

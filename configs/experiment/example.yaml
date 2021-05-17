@@ -6,3 +6,4 @@ dataset:
   _target_: data.ExampleDataModule
   data_root: ${experiment.data_root}
   batch_size: 64
+scheduler: ~

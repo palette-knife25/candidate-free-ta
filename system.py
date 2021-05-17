@@ -61,6 +61,9 @@ class CandidateFreeTE(pl.LightningModule):
       return {'avg_test_loss': avg_loss, 'avg_test_accuracy': avg_acc}
 
   def configure_optimizers(self):
-    optimizer = getattr(torch.optim, self.opt.optimizer)(self.parameters(), **self.opt.optimizer_args)
-    lr_scheduler = getattr(torch.optim.lr_scheduler, self.opt.scheduler)(optimizer, **self.opt.scheduler_args)
-    return [optimizer], [lr_scheduler]
+    optimizer = [getattr(torch.optim, self.opt.optimizer)(self.parameters(), **self.opt.optimizer_args)]
+    if self.opt.scheduler is not None:
+      lr_scheduler = [getattr(torch.optim.lr_scheduler, self.opt.scheduler)(optimizer, **self.opt.scheduler_args)]
+    else:
+      lr_scheduler = []
+    return optimizer, lr_scheduler

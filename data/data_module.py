@@ -13,12 +13,13 @@ class ExampleDataModule(pl.LightningDataModule):
         self.batch_size = batch_size
         self.transform = transforms.Compose([transforms.ToTensor(), 
                                              transforms.Normalize((0.1307,), (0.3081,))])
-        self.setup()
 
     def setup(self, stage: Optional[str] = None):
-        self.test_set = MNIST(self.data_root, train=False, download=True, transform=self.transform)
-        full_set = MNIST(self.data_root, train=True, download=True, transform=self.transform)
-        self.train_set, self.val_set = random_split(full_set, [55000, 5000])
+        if stage in (None, 'fit'):
+            full_set = MNIST(self.data_root, train=True, download=True, transform=self.transform)
+            self.train_set, self.val_set = random_split(full_set, [55000, 5000])
+        if stage in (None, 'test'):
+            self.test_set = MNIST(self.data_root, train=False, download=True, transform=self.transform)
 
     def train_dataloader(self):
         return DataLoader(self.train_set, batch_size=self.batch_size)
