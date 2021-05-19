@@ -18,6 +18,9 @@ class ExperimentConfig:
     scheduler: Optional[str] = 'ExponentialLR'
     scheduler_args: Any = defaulter({'gamma': 0.95})
 
+    base_model: str = 'bert-base-uncased'
+    type_embedding_max: int = 7
+
 @dataclass
 class Config:
     defaults: List[Any] = defaulter([{'experiment': 'basic'}])

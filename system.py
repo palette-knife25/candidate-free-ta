@@ -5,72 +5,77 @@ import torchmetrics
 import torch
 from torch import nn
 from torch.nn import functional as F
+from models import KBertEnricher
 
 
 class CandidateFreeTE(pl.LightningModule):
+	def __init__(self, opt: ExperimentConfig, mask_token_id=100):
+		super().__init__()
+		self.opt = opt
+		self.mask_token_id = mask_token_id
+		self.net = KBertEnricher(opt.base_model, opt.type_embedding_max)
+		self.val_metrics = {"ValidationAccuracy": torchmetrics.Accuracy()}
 
-  def __init__(self, opt: ExperimentConfig):
-    super().__init__()
+	def forward(self, token_ids, type_ids, synset_ids, highway):
+		return self.net(token_ids, type_ids, synset_ids, highway)
 
-    self.opt = opt
-    # Simple example
-    self.net = nn.Sequential(
-      nn.Flatten(),
-      nn.Linear(28 * 28, 128), nn.ReLU(),
-      nn.Linear(128, 256), nn.ReLU(),
-      nn.Dropout(0.4),
-      nn.Linear(256, 10),
-      nn.LogSoftmax(dim=-1)
-    )
-    self.val_metrics = {"ValidationAccuracy": torchmetrics.Accuracy()}
+	def infere_top_k(self, x, k):
+		raise Exception("Not implemented")
 
-  def forward(self, x):
-      return self.net(x)
+	def criterion(self, log_probs, labels, mask):
+		"""
+		NLL Loss of a batch of tokens with different lengths
+		:param log_probs: torch.Tensor of shape [b x seq_len x vocab_size]
+		:param labels: torch.Tensor of shape [sum(mask)]
+		:param mask: torch.Tensor of shape [b x seq_len] is true if the token must be predicted
+		:return:
+		"""
+		loss = F.nll_loss(log_probs[mask], labels, reduction="none")
+		scale = (mask / mask.sum(dim=1))[mask]  # weights each element in a row by the number of tokens to be predicted
+		loss = (loss * scale).mean()
+		return loss
 
-  def infere_top_k(self, x, k):
-      raise Exception("Not implemented")
+	def training_step(self, train_batch, batch_idx):
+		(token_ids, type_ids, synset_ids, highway), gt_ids = train_batch
+		log_probs = self.forward(token_ids, type_ids, synset_ids, highway)
+		gt_mask = token_ids == self.mask_token_id
 
-  def criterion(self, logits, labels):
-    return F.nll_loss(logits, labels)
+		loss = self.criterion(log_probs, gt_ids, gt_mask)
 
-  def training_step(self, train_batch, batch_idx):
-      x, y = train_batch
-      logits = self.forward(x)
-      loss = self.criterion(logits, y)
+		self.log('TrainLoss', loss)
+		return {'loss': loss}
 
-      self.log('TrainLoss', loss)
-      return {'loss': loss}
+	def validation_step(self, val_batch, batch_idx):
+		raise Exception("Not implemented")
+		x, y = val_batch
+		logits = self.forward(x)
+		loss = self.criterion(logits, y)
+		return {'loss': loss, 'preds': torch.argmax(logits, dim=1), 'target': y}
 
-  def validation_step(self, val_batch, batch_idx):
-      x, y = val_batch
-      logits = self.forward(x)
-      loss = self.criterion(logits, y)
-      return {'loss': loss, 'preds': torch.argmax(logits, dim=1), 'target': y}
+	def test_step(self, val_batch, batch_idx):
+		return self.validation_step(self, val_batch, batch_idx)
 
-  def test_step(self, val_batch, batch_idx):
-      return self.validation_step(self, val_batch, batch_idx)
+	def validation_step_end(self, outputs):
+		for name, metric in self.val_metrics.items():
+			metric(outputs['preds'], outputs['target'])
+			self.log(name, metric, on_step=False, on_epoch=True)
+		return outputs
 
-  def validation_step_end(self, outputs):
-      for name, metric in self.val_metrics.items():
-        metric(outputs['preds'], outputs['target'])
-        self.log(name, metric, on_step=False, on_epoch=True)
-      return outputs
+	def validation_epoch_end(self, outputs):
+		avg_loss = torch.stack([x['loss'] for x in outputs]).mean()
 
-  def validation_epoch_end(self, outputs):
-      avg_loss = torch.stack([x['loss'] for x in outputs]).mean()
+		self.log("ValidationLoss", avg_loss)
+		return {'avg_val_loss': avg_loss}
 
-      self.log("ValidationLoss", avg_loss)
-      return {'avg_val_loss': avg_loss}
+	def test_epoch_end(self, outputs):
+		avg_loss = torch.stack([x['loss'] for x in outputs]).mean()
 
-  def test_epoch_end(self, outputs):
-      avg_loss = torch.stack([x['loss'] for x in outputs]).mean()
+		return {'avg_test_loss': avg_loss}
 
-      return {'avg_test_loss': avg_loss}
-
-  def configure_optimizers(self):
-    optimizer = [getattr(torch.optim, self.opt.optimizer)(self.parameters(), **self.opt.optimizer_args)]
-    if self.opt.scheduler is not None:
-      lr_scheduler = [getattr(torch.optim.lr_scheduler, self.opt.scheduler)(optimizer, **self.opt.scheduler_args)]
-    else:
-      lr_scheduler = []
-    return optimizer, lr_scheduler
+	def configure_optimizers(self):
+		optimizer = [getattr(torch.optim, self.opt.optimizer)(self.parameters(), **self.opt.optimizer_args)]
+		if self.opt.scheduler is not None:
+			lr_scheduler = [getattr(torch.optim.lr_scheduler, self.opt.scheduler)(optimizer, **self.opt.scheduler_args)]
+		else:
+			lr_scheduler = []
+		return optimizer, lr_scheduler
