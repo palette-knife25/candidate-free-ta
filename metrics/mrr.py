@@ -42,10 +42,9 @@ def reciprocal_rank(correct_preds: torch.Tensor):
     reciprocal.masked_fill_(all_zero, 0)
     return reciprocal
 
-def build_correct_preds(preds: torch.Tensor, labels: List[List[int]]):
+def build_match_matrix(preds: List[List[str]], labels: List[List[str]]):
     lemmas_sets = [set(lemmas) for lemmas in labels]
-    correct_preds = preds.new_zeros(preds.shape, dtype=torch.bool)
-    preds = preds.detach().cpu().numpy()
+    correct_preds = torch.zeros((len(preds), len(preds[0])), dtype=torch.bool)
     for i, lemmas in enumerate(lemmas_sets):
         for j, pred in enumerate(preds[i]):
             correct_preds[i, j] = pred in lemmas

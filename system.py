@@ -27,6 +27,9 @@ class CandidateFreeTE(pl.LightningModule):
   def forward(self, x):
       return self.net(x)
 
+  def infere_top_k(self, x, k):
+      raise Exception("Not implemented")
+
   def criterion(self, logits, labels):
     return F.nll_loss(logits, labels)
 
