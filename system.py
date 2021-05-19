@@ -1,5 +1,6 @@
 from options import ExperimentConfig
 import pytorch_lightning as pl
+import torchmetrics
 
 import torch
 from torch import nn
@@ -21,6 +22,7 @@ class CandidateFreeTE(pl.LightningModule):
       nn.Linear(256, 10),
       nn.LogSoftmax(dim=-1)
     )
+    self.val_metrics = {"ValidationAccuracy": torchmetrics.Accuracy()}
 
   def forward(self, x):
       return self.net(x)
@@ -40,25 +42,27 @@ class CandidateFreeTE(pl.LightningModule):
       x, y = val_batch
       logits = self.forward(x)
       loss = self.criterion(logits, y)
-      acc = (torch.argmax(logits, dim=-1) == y).float().mean()
-      return {'loss': loss, 'accuracy': acc}
+      return {'loss': loss, 'preds': torch.argmax(logits, dim=1), 'target': y}
 
   def test_step(self, val_batch, batch_idx):
       return self.validation_step(self, val_batch, batch_idx)
 
+  def validation_step_end(self, outputs):
+      for name, metric in self.val_metrics.items():
+        metric(outputs['preds'], outputs['target'])
+        self.log(name, metric, on_step=False, on_epoch=True)
+      return outputs
+
   def validation_epoch_end(self, outputs):
       avg_loss = torch.stack([x['loss'] for x in outputs]).mean()
-      avg_acc = torch.stack([x['accuracy'] for x in outputs]).mean()
 
-      self.log("AvgValLoss", avg_loss)
-      self.log("AvgValAccuracy", avg_acc)
-      return {'avg_val_loss': avg_loss, 'avg_val_accuracy': avg_acc}
+      self.log("ValidationLoss", avg_loss)
+      return {'avg_val_loss': avg_loss}
 
   def test_epoch_end(self, outputs):
       avg_loss = torch.stack([x['loss'] for x in outputs]).mean()
-      avg_acc = torch.stack([x['accuracy'] for x in outputs]).mean()
 
-      return {'avg_test_loss': avg_loss, 'avg_test_accuracy': avg_acc}
+      return {'avg_test_loss': avg_loss}
 
   def configure_optimizers(self):
     optimizer = [getattr(torch.optim, self.opt.optimizer)(self.parameters(), **self.opt.optimizer_args)]

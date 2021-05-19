@@ -17,8 +17,8 @@ def train(opt: ExperimentConfig):
     dm: pl.LightningDataModule = instantiate(opt.dataset)
     logger = TensorBoardLogger(".", name="", version="", default_hp_metric=False)
     
-    checkpoint_callback = ModelCheckpoint(dirpath='./checkpoints', filename='best_{epoch}-{AvgValLoss:.2f}',
-                                        monitor='AvgValLoss', mode='min', every_n_val_epochs=1, save_last=True)
+    checkpoint_callback = ModelCheckpoint(dirpath='./checkpoints', filename='best_{epoch}-{ValidationLoss:.2f}',
+                                        monitor='ValidationLoss', mode='min', every_n_val_epochs=1, save_last=True)
     trainer = pl.Trainer(callbacks=[checkpoint_callback], logger=logger, default_root_dir="./", **opt.trainer_args)
 
     trainer.fit(model, datamodule=dm)
