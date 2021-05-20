@@ -83,13 +83,15 @@ class TaxoBERTDataModule(pl.LightningDataModule):
                  batch_size: int = 32,
                  val_ratio: float = 0.1,
                  force_format: bool = False,
-                 data_root: str = "./"
+                 data_root: str = "./",
+                 max_lemmas: int = 3
                  ):
         super().__init__()
 
         self.batch_size = batch_size
         self.val_ratio = val_ratio
         self.force_format = force_format
+        self.max_lemmas = max_lemmas
 
         # TODO: Make those arguments
         self.json_path = os.path.join(data_root, JSON_PATH)
@@ -158,7 +160,10 @@ class TaxoBERTDataModule(pl.LightningDataModule):
 
             # Add neighbors
             for level in levels:
-                for sub_synset, lemmas in entry[level].items():
+                # limit the number of adjacent nodes
+                level_items = list(entry[level].items())
+                level_items = [level_items[index] for index in torch.randperm(len(level_items))[:self.max_lemmas]]
+                for sub_synset, lemmas in level_items:
                     # Tokenize the synset
                     clean_synset = sub_synset.split(".")[0].replace("_", " ")
                     synset_token_ids = self.tokenizer(
@@ -173,6 +178,8 @@ class TaxoBERTDataModule(pl.LightningDataModule):
                     synset_ids.extend([synset_id] * n_tokens)
                     is_highway.extend([True] * n_tokens)
 
+                    # limit the number of lemmas in adjacent nodes
+                    lemmas = [lemmas[index] for index in torch.randperm(len(lemmas))[:self.max_lemmas]]
                     # Tokenize the synset's other lemmas
                     clean_lemmas = " ".join(lemmas).replace("_", " ")
                     clean_lemmas = clean_lemmas.replace(clean_synset, "")

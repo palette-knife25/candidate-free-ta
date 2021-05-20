@@ -9,10 +9,11 @@ from models import KBertEnricher
 
 
 class CandidateFreeTE(pl.LightningModule):
-	def __init__(self, opt: ExperimentConfig, mask_token_id=100):
+	def __init__(self, opt: ExperimentConfig, tokenizer):
 		super().__init__()
 		self.opt = opt
-		self.mask_token_id = mask_token_id
+		self.tokenizer = tokenizer
+		self.mask_token_id = self.tokenizer.mask_token_id
 		self.net = KBertEnricher(opt.base_model, opt.type_embedding_max)
 		self.val_metrics = {"ValidationAccuracy": torchmetrics.Accuracy()}
 
@@ -31,8 +32,8 @@ class CandidateFreeTE(pl.LightningModule):
 		:return:
 		"""
 		loss = F.nll_loss(log_probs[mask], labels, reduction="none")
-		scale = (mask / mask.sum(dim=1))[mask]  # weights each element in a row by the number of tokens to be predicted
-		loss = (loss * scale).mean()
+		scale = (mask / mask.sum(dim=1, keepdims=True))[mask]  # weights each element in a row by the number of tokens to be predicted
+		loss = (loss * scale).sum() / mask.shape[0]
 		return loss
 
 	def training_step(self, train_batch, batch_idx):
@@ -46,20 +47,22 @@ class CandidateFreeTE(pl.LightningModule):
 		return {'loss': loss}
 
 	def validation_step(self, val_batch, batch_idx):
-		raise Exception("Not implemented")
-		x, y = val_batch
-		logits = self.forward(x)
-		loss = self.criterion(logits, y)
-		return {'loss': loss, 'preds': torch.argmax(logits, dim=1), 'target': y}
+		(token_ids, type_ids, synset_ids, highway), gt_ids = val_batch
+		log_probs = self.forward(token_ids, type_ids, synset_ids, highway)
+		gt_mask = token_ids == self.mask_token_id
+
+		loss = self.criterion(log_probs, gt_ids, gt_mask)
+		# TODO: add validation metrics
+		return {'loss': loss}
 
 	def test_step(self, val_batch, batch_idx):
 		return self.validation_step(self, val_batch, batch_idx)
 
-	def validation_step_end(self, outputs):
-		for name, metric in self.val_metrics.items():
-			metric(outputs['preds'], outputs['target'])
-			self.log(name, metric, on_step=False, on_epoch=True)
-		return outputs
+	# def validation_step_end(self, outputs):
+	# 	for name, metric in self.val_metrics.items():
+	# 		metric(outputs['preds'], outputs['target'])
+	# 		self.log(name, metric, on_step=False, on_epoch=True)
+	# 	return outputs
 
 	def validation_epoch_end(self, outputs):
 		avg_loss = torch.stack([x['loss'] for x in outputs]).mean()
@@ -75,7 +78,7 @@ class CandidateFreeTE(pl.LightningModule):
 	def configure_optimizers(self):
 		optimizer = [getattr(torch.optim, self.opt.optimizer)(self.parameters(), **self.opt.optimizer_args)]
 		if self.opt.scheduler is not None:
-			lr_scheduler = [getattr(torch.optim.lr_scheduler, self.opt.scheduler)(optimizer, **self.opt.scheduler_args)]
+			lr_scheduler = [getattr(torch.optim.lr_scheduler, self.opt.scheduler)(optimizer[0], **self.opt.scheduler_args)]
 		else:
 			lr_scheduler = []
 		return optimizer, lr_scheduler

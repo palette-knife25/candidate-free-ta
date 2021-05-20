@@ -13,8 +13,8 @@ import pytorch_lightning as pl
 
 
 def train(opt: ExperimentConfig):
-    model = CandidateFreeTE(opt)
     dm: pl.LightningDataModule = instantiate(opt.dataset)
+    model = CandidateFreeTE(opt, dm.tokenizer)
     logger = TensorBoardLogger(".", name="", version="", default_hp_metric=False)
     
     checkpoint_callback = ModelCheckpoint(dirpath='./checkpoints', filename='best_{epoch}-{ValidationLoss:.2f}',
