@@ -2,6 +2,7 @@ from io import BytesIO
 import json
 import os
 from pathlib import Path
+import itertools
 from string import punctuation
 from typing import Optional
 from zipfile import ZipFile
@@ -81,7 +82,8 @@ class TaxoBERTDataModule(pl.LightningDataModule):
     def __init__(self,
                  batch_size: int = 32,
                  val_ratio: float = 0.1,
-                 force_format: bool = False
+                 force_format: bool = False,
+                 data_root: str = "./"
                  ):
         super().__init__()
 
@@ -90,10 +92,11 @@ class TaxoBERTDataModule(pl.LightningDataModule):
         self.force_format = force_format
 
         # TODO: Make those arguments
-        self.train_json_path = JSON_PATH + os.sep + TRAIN_JSON_NAME
-        self.test_json_path = JSON_PATH + os.sep + TEST_JSON_NAME
-        self.train_dump_path = DUMP_PATH + os.sep + TRAIN_DUMP_NAME
-        self.test_dump_path = DUMP_PATH + os.sep + TEST_DUMP_NAME
+        self.json_path = os.path.join(data_root, JSON_PATH)
+        self.train_json_path = os.path.join(self.json_path, TRAIN_JSON_NAME)
+        self.test_json_path = os.path.join(self.json_path, TEST_JSON_NAME)
+        self.train_dump_path = os.path.join(data_root, DUMP_PATH, TRAIN_DUMP_NAME)
+        self.test_dump_path = os.path.join(data_root, DUMP_PATH, TEST_DUMP_NAME)
         self.level_to_id = LEVEL_TO_ID
 
         # Instantiate the tokenizer
@@ -119,7 +122,7 @@ class TaxoBERTDataModule(pl.LightningDataModule):
             # Unzip the archive
             print("Extracting the data")
             zip = ZipFile(BytesIO(r.content))
-            zip.extractall(JSON_PATH)
+            zip.extractall(self.json_path)
 
     def process_data(self, json_obj):
         """
@@ -189,28 +192,6 @@ class TaxoBERTDataModule(pl.LightningDataModule):
             all_level_ids.append(torch.as_tensor(level_ids))
             all_synset_ids.append(torch.as_tensor(synset_ids))
             all_is_highway.append(torch.as_tensor(is_highway))
-
-        # Pad all sequences
-        all_token_ids = pad_sequence(
-            all_token_ids,
-            batch_first=True,
-            padding_value=self.tokenizer.pad_token_id
-        )
-        all_level_ids = pad_sequence(
-            all_level_ids,
-            batch_first=True,
-            padding_value=-1
-        )
-        all_synset_ids = pad_sequence(
-            all_synset_ids,
-            batch_first=True,
-            padding_value=-1
-        )
-        all_is_highway = pad_sequence(
-            all_is_highway,
-            batch_first=True,
-            padding_value=False
-        )
 
         data = (
             all_token_ids,
@@ -371,7 +352,7 @@ class TaxoBERTDataModule(pl.LightningDataModule):
 
             # Use a part of the training set as validation set
             full_len = len(train_val_set)
-            val_share = self.val_ratio * full_len
+            val_share = int(self.val_ratio * full_len)
             split = [full_len - val_share, val_share]
             self.train_set, self.val_set = random_split(
                 train_val_set,
@@ -392,14 +373,21 @@ class TaxoBERTDataModule(pl.LightningDataModule):
                 save_path.parent.mkdir(parents=True, exist_ok=True)
                 torch.save(self.test_set, save_path)
 
+    def collate_fn(self, batch):
+        x, y = list(zip(*batch))
+        lists = list(zip(*x))
+        y = list(itertools.chain.from_iterable(y))
+        padded = [pad_sequence(item, batch_first=True, padding_value=0) for item in lists]
+        return padded, padded[0].new_tensor(y)
+
     def train_dataloader(self):
-        return DataLoader(self.train_set, batch_size=self.batch_size)
+        return DataLoader(self.train_set, batch_size=self.batch_size, collate_fn=self.collate_fn)
 
     def val_dataloader(self):
-        return DataLoader(self.val_set, batch_size=self.batch_size)
+        return DataLoader(self.val_set, batch_size=self.batch_size, collate_fn=self.collate_fn)
 
     def test_dataloader(self):
-        return DataLoader(self.test_set, batch_size=self.batch_size)
+        return DataLoader(self.test_set, batch_size=self.batch_size, collate_fn=self.collate_fn)
 
 
 if __name__ == "__main__":
@@ -411,10 +399,11 @@ if __name__ == "__main__":
     torch.set_printoptions(profile="full")
     max_len = 50
 
-    print(dm.tokenizer.convert_ids_to_tokens(dm.test_set[0][0][0])[:max_len])
+    it = next(iter(dm.test_dataloader()))
+    print(dm.tokenizer.convert_ids_to_tokens(it[0][0][0])[:max_len])
     print("*" * 20)
-    for item in dm.test_set[0][0]:
-        print(item[:max_len])
+    for item in it[0]:
+        print(item[0][:max_len])
         print("*" * 20)
 
-    print("Target:", dm.test_set[0][1])
+    print("Target:", it[1])

@@ -3,7 +3,7 @@ name: "example"
 trainer_args:
   max_epochs: 5
 dataset:
-  _target_: data.ExampleDataModule
+  _target_: data.TaxoBERTDataModule
   data_root: ${experiment.data_root}
   batch_size: 64
 scheduler: ~
