@@ -1,1 +1,3 @@
-from .data_module import ExampleDataModule
+from .data_module import TaxoBERTDataModule
+
+__all__ = ["TaxoBERTDataModule"]
