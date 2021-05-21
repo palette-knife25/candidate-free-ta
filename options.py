@@ -16,7 +16,7 @@ class ExperimentConfig:
     optimizer: str = 'Adam'
     optimizer_args: Any = defaulter({'lr': 0.001})
     scheduler: Optional[str] = 'ExponentialLR'
-    scheduler_args: Any = defaulter({'gamma': 0.95})
+    scheduler_args: Any = defaulter({})
 
     base_model: str = 'bert-base-uncased'
     type_embedding_max: int = 7

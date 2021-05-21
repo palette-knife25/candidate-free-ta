@@ -2,7 +2,7 @@
 name: "example"
 trainer_args:
   max_epochs: 5
-  gradine_clip_val: 1.0
+  gradient_clip_val: 1.0
 dataset:
   _target_: data.TaxoBERTDataModule
   data_root: ${experiment.data_root}
