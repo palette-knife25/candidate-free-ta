@@ -1,39 +1,68 @@
 from io import BytesIO
+import itertools
 import json
 import os
 from pathlib import Path
-import itertools
-from string import punctuation
 from typing import Optional
 from zipfile import ZipFile
 
 import pytorch_lightning as pl
 import requests
 import torch
-from torch.nn.utils.rnn import pack_sequence, pad_sequence
+from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data.dataloader import DataLoader
-from torch.utils.data.dataset import Dataset, Subset, random_split
+from torch.utils.data.dataset import Dataset, random_split
 from tqdm import tqdm
 from transformers import BertTokenizerFast
 
 
+# TODO: Update URL
 URL = "https://www.dropbox.com/s/jcx2ld4jw5tbvrb/taxo_bert_test3K.zip?dl=1"
 JSON_PATH = "./json"
 DUMP_PATH = "./dumps"
-TRAIN_JSON_NAME = "train_graph_relations_bert_3K.json"
-TEST_JSON_NAME = "test_graph_relations_bert_3K.json"
+TRAIN_JSON_NAME = "train_graph_relations_bert_3K_rel.json"
+TEST_JSON_NAME = "test_graph_relations_bert_3K_rel.json"
 TRAIN_DUMP_NAME = "train.pth"
 TEST_DUMP_NAME = "test.pth"
 
 LEVEL_TO_ID = {
-    "lemmas": 0,
-    "hypernyms": 1,
-    "second_order_hypernyms": 2,
-    "hyponyms": 3,
-    "second_order_hyponyms": 4,
-    "co_hypernyms": 5,
-    "co_hyponyms": 6,
+    ("current", "current"): 0,
+    ("hypernyms", "current"): 1,
+    ("hypernyms", "hypernyms"): 2,
+    ("hyponyms", "current"): 3,
+    ("hyponyms", "hyponyms"): 4,
+    ("hypernyms", "hyponyms"): 5,
+    ("hyponyms", "hypernyms"): 6,
 }
+
+ENC_TO_ID = {
+    "token_ids": 0,
+    "level_ids": 1,
+    "synset_ids": 2,
+    "lemma_ids": 3,
+    "is_highway": 4,
+}
+
+
+def where_in(a, b):
+    """
+    Find where values of a first tensor are equal to values of a second one.
+
+    :param a: torch.tensor, field tensor
+    :param b: torch.tensor, query tensor
+    :return: torch.tensor, indices where values of b were found in a
+    """
+    return (a[..., None] == b).any(-1).nonzero().squeeze()
+
+
+def choose(n, a):
+    """
+    Randomly choose n elements from a 1d-tensor.
+
+    :param n: int, number of elements to draw
+    :param a: torch.tensor, tensor to draw elements from
+    """
+    return torch.as_tensor([a[idx] for idx in torch.randperm(len(a))[:n]])
 
 
 class TaxoBERTDataset(Dataset):
@@ -45,12 +74,22 @@ class TaxoBERTDataset(Dataset):
     :param synset_ids: torch.tensor, encoded synsets
     :param is_highway: torch.tensor, contains 1 if the related token is on the
         main branch of the graph, else 0
-    :param lemmas: list, lemmas of the masked synset
+    :param target_ids: list, lemmas of the masked synset
     """
-    def __init__(self, token_ids, level_ids, synset_ids, is_highway, target_ids):
+
+    def __init__(
+        self,
+        token_ids,
+        level_ids,
+        synset_ids,
+        lemma_ids,
+        is_highway,
+        target_ids
+    ):
         self.token_ids = token_ids
         self.level_ids = level_ids
         self.synset_ids = synset_ids
+        self.lemma_ids = lemma_ids
         self.is_highway = is_highway
         self.target_ids = target_ids
 
@@ -62,6 +101,7 @@ class TaxoBERTDataset(Dataset):
             self.token_ids[item],
             self.level_ids[item],
             self.synset_ids[item],
+            self.lemma_ids[item],
             self.is_highway[item]
         )
         target = self.target_ids[item]
@@ -76,32 +116,40 @@ class TaxoBERTDataModule(pl.LightningDataModule):
     :param batch_size: int, the number of samples per batch (default: 32)
     :param val_ratio: float, the ratio of samples from the training set to be
         used for validation (default: 0.1)
-    :param force_format: bool, if True avoid loading data from dumps
+    :param max_synsets: int, the number of synsets to sample per level
+        (default: 3)
+    :param max_lemmas: int, the number of lemmas to sample per synset
+        (default: 3)
+    :param force_process: bool, if True avoid loading data from dumps
         (default: False)
+    :param data_root: str, path to the root with all data files (default: "./")
     """
-    def __init__(self,
-                 batch_size: int = 32,
-                 val_ratio: float = 0.1,
-                 force_format: bool = False,
-                 data_root: str = "./",
-                 max_lemmas: int = 3
-                 ):
+    def __init__(
+        self,
+        batch_size: int = 32,
+        val_ratio: float = 0.1,
+        max_synsets: int = 3,
+        max_lemmas: int = 3,
+        force_process: bool = False,
+        data_root: str = "./",
+    ):
         super().__init__()
 
         self.batch_size = batch_size
         self.val_ratio = val_ratio
-        self.force_format = force_format
+        self.force_process = force_process
+        self.max_synsets = max_synsets
         self.max_lemmas = max_lemmas
 
-        # TODO: Make those arguments
         self.json_path = os.path.join(data_root, JSON_PATH)
         self.train_json_path = os.path.join(self.json_path, TRAIN_JSON_NAME)
         self.test_json_path = os.path.join(self.json_path, TEST_JSON_NAME)
         self.train_dump_path = os.path.join(data_root, DUMP_PATH, TRAIN_DUMP_NAME)
         self.test_dump_path = os.path.join(data_root, DUMP_PATH, TEST_DUMP_NAME)
-        self.level_to_id = LEVEL_TO_ID
 
-        # Instantiate the tokenizer
+        self.level_to_id = LEVEL_TO_ID
+        self.enc_to_id = ENC_TO_ID
+
         self.tokenizer = BertTokenizerFast.from_pretrained('bert-base-uncased')
 
     @staticmethod
@@ -112,231 +160,129 @@ class TaxoBERTDataModule(pl.LightningDataModule):
         return json_obj
 
     def prepare_data(self):
-        has_all_files = all(os.path.isfile(p) \
-            for p in (self.train_json_path, self.test_json_path)
+        has_all_files = all(
+            os.path.isfile(p) for p in
+            (self.train_json_path, self.test_json_path)
         )
 
         if not has_all_files:
+            # TODO: Upload files somewhere
+            raise FileNotFoundError("Files still not uploaded")
+
             # Download the archive
             print("Downloading the data")
             r = requests.get(URL, stream=True)
 
             # Unzip the archive
             print("Extracting the data")
-            zip = ZipFile(BytesIO(r.content))
-            zip.extractall(self.json_path)
+            z = ZipFile(BytesIO(r.content))
+            z.extractall(self.json_path)
 
-    def process_data(self, json_obj):
+    def process_data(self, json_dict: dict):
         """
-        Seems to be OK, but time and memory demanding
+        Unpack the data from a JSON object and create encodings.
+
+        This function assumes that for each synset, its lemma on highway is
+        always at index 0.
+
+        :param json_dict: dict, graph structured data read from a JSON file
+        :return: tuple, all lemmas and their relevant encodings
         """
         all_token_ids = []
         all_level_ids = []
         all_synset_ids = []
+        all_lemma_ids = []
         all_is_highway = []
-        all_target_ids = []
-        levels = [l for l in self.level_to_id.keys() if l != "lemmas"]
+        all_targets = []
+
+        def tokenize(lemma_):
+            return self.tokenizer(
+                lemma_,
+                add_special_tokens=False,
+                truncation=True,
+                is_split_into_words=True,
+                return_token_type_ids=False,
+            ).input_ids
+
+        def add_lemma(lemma_, abs_level_, synset_id_, is_highway_):
+            lemma_token_ids = tokenize([lemma_])
+            n_tokens_ = len(lemma_token_ids)
+            token_ids.extend(lemma_token_ids)
+            level_ids.extend([self.level_to_id[abs_level_]] * n_tokens_)
+            synset_ids.extend([synset_id_] * n_tokens_)
+            lemma_ids.extend([lemma_ids[-1] + 1] * n_tokens_)
+            is_highway.extend([is_highway_] * n_tokens_)
 
         # Go through all JSON entries
-        for synset, entry in tqdm(json_obj.items()):
+        for synset in tqdm(json_dict.values()):
             token_ids = []
             level_ids = []
             synset_ids = []
+            lemma_ids = []
             is_highway = []
 
-            # Get the ground truth tokens, and mask them
-            clean_synset = synset.split(".")[0].replace("_", " ")
-            synset_token_ids = self.tokenizer(
-                clean_synset,
-                add_special_tokens=False,
-                truncation=True
-            ).input_ids
-            n_tokens = len(synset_token_ids)
-            all_target_ids.append(synset_token_ids)
+            lemmas = [l.replace("_", " ") for l in synset["lemmas"]]
+            abs_level = ("current", "current")
+
+            # Set the synset's lemma that is on highway as target
+            highway_lemma = lemmas.pop(0)
+            highway_token_ids = tokenize([highway_lemma])
+            all_targets.append(highway_token_ids)
+            n_tokens = len(highway_token_ids)
+
+            # Replace it by a mask
             token_ids.extend([self.tokenizer.mask_token_id] * n_tokens)
-            level_ids.extend([self.level_to_id["lemmas"]] * n_tokens)
+            level_ids.extend([self.level_to_id[abs_level]] * n_tokens)
             synset_ids.extend([0] * n_tokens)
+            lemma_ids.extend([0] * n_tokens)
             is_highway.extend([True] * n_tokens)
 
-            # Add neighbors
-            for level in levels:
-                # limit the number of adjacent nodes
-                level_items = list(entry[level].items())
-                level_items = [level_items[index] for index in torch.randperm(len(level_items))[:self.max_lemmas]]
-                for sub_synset, lemmas in level_items:
-                    # Tokenize the synset
-                    clean_synset = sub_synset.split(".")[0].replace("_", " ")
-                    synset_token_ids = self.tokenizer(
-                        clean_synset,
-                        add_special_tokens=False,
-                        truncation=True
-                    ).input_ids
-                    n_tokens = len(synset_token_ids)
-                    token_ids.extend(synset_token_ids)
-                    level_ids.extend([self.level_to_id[level]] * n_tokens)
-                    synset_id = synset_ids[-1] + 1
-                    synset_ids.extend([synset_id] * n_tokens)
-                    is_highway.extend([True] * n_tokens)
+            # Add the synset's other lemmas
+            for lemma in lemmas:
+                add_lemma(lemma, abs_level, 0, False)
 
-                    # limit the number of lemmas in adjacent nodes
-                    lemmas = [lemmas[index] for index in torch.randperm(len(lemmas))[:self.max_lemmas]]
-                    # Tokenize the synset's other lemmas
-                    clean_lemmas = " ".join(lemmas).replace("_", " ")
-                    clean_lemmas = clean_lemmas.replace(clean_synset, "")
-                    lemmas_token_ids = self.tokenizer(
-                        clean_lemmas,
-                        truncation=True,
-                        add_special_tokens=False
-                    ).input_ids
-                    n_tokens = len(lemmas_token_ids)
-                    token_ids.extend(lemmas_token_ids)
-                    level_ids.extend([self.level_to_id[level]] * n_tokens)
-                    synset_ids.extend([synset_id] * n_tokens)
-                    is_highway.extend([False] * n_tokens)
+            for level in ("hypernyms", "hyponyms"):
+                for sub_synset in synset[level].values():
+                    lemmas = [l.replace("_", " ") for l in sub_synset["lemmas"]]
+                    abs_level = (level, "current")
+                    synset_id = synset_ids[-1] + 1
+
+                    # Add the synset's lemma that is on highway
+                    highway_lemma = lemmas.pop(0)
+                    add_lemma(highway_lemma, abs_level, synset_id, True)
+
+                    # Add the synset's other lemmas
+                    for lemma in lemmas:
+                        add_lemma(lemma, abs_level, synset_id, False)
+
+                    for sub_level in ("hypernyms", "hyponyms"):
+                        for sub_sub_lemmas in sub_synset[sub_level].values():
+                            lemmas = [l.replace("_", " ") for l in sub_sub_lemmas]
+                            abs_level = (level, sub_level)
+                            synset_id = synset_ids[-1] + 1
+
+                            # Add the synset's lemma that is on highway
+                            highway_lemma = lemmas.pop(0)
+                            add_lemma(highway_lemma, abs_level, synset_id, True)
+
+                            # Add the synset's other lemmas
+                            for lemma in lemmas:
+                                add_lemma(lemma, abs_level, synset_id, False)
 
             # Append the global lists
-            all_token_ids.append(torch.as_tensor(token_ids))
-            all_level_ids.append(torch.as_tensor(level_ids))
-            all_synset_ids.append(torch.as_tensor(synset_ids))
-            all_is_highway.append(torch.as_tensor(is_highway))
-
-        data = (
-            all_token_ids,
-            all_level_ids,
-            all_synset_ids,
-            all_is_highway,
-            all_target_ids
-        )
-
-        return data
-
-    def recover_encodings(self, encodings, lists):
-        all_starts = encodings.offset_mapping[:, :, 0]
-        max_len = all_starts.size()[-1]
-        recovered = [torch.zeros_like(encodings.input_ids) for l in lists]
-
-        for i, starts in enumerate(tqdm(all_starts[:, 1:])) :
-            j = 0
-            k = 0
-            repeats = [1]
-
-            while len(repeats) < len(lists[0][i]) and k < max_len - 1:
-                if starts[k] != 0:
-                    # val += 1
-                    repeats[-1] += 1
-                else:
-                    repeats.append(1)
-                    j += 1
-                k += 1
-
-            repeats = torch.as_tensor(repeats)
-            length = repeats.sum().item()
-
-            for i_l, l in enumerate(lists):
-                t = torch.repeat_interleave(
-                    torch.as_tensor(l[i][:len(repeats)]), repeats
-                )
-                recovered[i_l][i, :length] = t
-
-        return recovered
-
-    def process_data_fast(self, json_obj):
-        """
-        TODO: Check outputs
-        """
-        all_to_tokenize = []
-        all_level_ids = []
-        all_synset_ids = []
-        all_is_highway = []
-        all_targets = []
-        levels = [l for l in self.level_to_id.keys() if l != "lemmas"]
-
-        # Go through all JSON entries
-        for synset, entry in tqdm(json_obj.items()):
-            to_tokenize = []
-            level_ids = []
-            synset_ids = []
-            is_highway = []
-
-            # Get the ground truth tokens, and mask them
-            clean_synset = "".join(synset.split(".")[:-2]).split("_")
-            len_synset = len(clean_synset)
-            all_targets.append(clean_synset)
-            to_tokenize.extend([self.tokenizer.mask_token] * len_synset)
-            level_ids.extend([self.level_to_id["lemmas"]] * len_synset)
-            synset_ids.extend([0] * len_synset)
-            is_highway.extend([True] * len_synset)
-
-            # Add neighbors
-            for level in levels:
-                for sub_synset, lemmas in entry[level].items():
-                    # Tokenize the synset
-                    clean_synset = "".join(sub_synset.split(".")[:-2]).lower()
-                    clean_synset = clean_synset.replace(".", "").split("_")
-                    len_synset = len(clean_synset)
-                    to_tokenize.extend(clean_synset)
-                    level_ids.extend([self.level_to_id[level]] * len_synset)
-                    synset_id = synset_ids[-1] + 1
-                    synset_ids.extend([synset_id] * len_synset)
-                    is_highway.extend([True] * len_synset)
-
-                    # Tokenize the synset's other lemmas
-                    clean_lemmas = [
-                        l.lower().replace(".", "").split("_") for l in lemmas
-                    ]
-                    clean_lemmas = [l for l_s in clean_lemmas for l in l_s]
-                    for s in clean_synset:
-                        clean_lemmas.remove(s)
-                    n_lemmas = len(clean_lemmas)
-                    to_tokenize.extend(clean_lemmas)
-                    level_ids.extend([self.level_to_id[level]] * n_lemmas)
-                    synset_ids.extend([synset_id] * n_lemmas)
-                    is_highway.extend([False] * n_lemmas)
-
-            # Append the global lists
-            all_to_tokenize.append(to_tokenize)
+            all_token_ids.append(token_ids)
             all_level_ids.append(level_ids)
             all_synset_ids.append(synset_ids)
+            all_lemma_ids.append(lemma_ids)
             all_is_highway.append(is_highway)
-
-        # Perform tokenization
-        print("Performing tokenization")
-        inp_encodings = self.tokenizer(
-            all_to_tokenize,
-            add_special_tokens=False,
-            padding=True,
-            truncation=True,
-            is_split_into_words=True,
-            return_tensors="pt",
-            return_token_type_ids=False,
-            return_offsets_mapping=True
-        )
-        all_token_ids = inp_encodings.input_ids
-
-        print(all_targets)
-
-        out_encodings = self.tokenizer(
-            all_targets,
-            add_special_tokens=False,
-            truncation=True,
-            is_split_into_words=True,
-            return_token_type_ids=False,
-        )
-        all_target_ids = out_encodings.input_ids
-
-        # Respan encoding values depending on truncation
-        print("Recovering encodings")
-        all_level_ids, all_synset_ids, all_is_highway = self.recover_encodings(
-            inp_encodings,
-            (all_level_ids, all_synset_ids, all_is_highway)
-        )
 
         data = (
             all_token_ids,
             all_level_ids,
             all_synset_ids,
+            all_lemma_ids,
             all_is_highway,
-            all_target_ids
+            all_targets
         )
 
         return data
@@ -344,13 +290,12 @@ class TaxoBERTDataModule(pl.LightningDataModule):
     def setup(self, stage: Optional[str] = None):
 
         if stage in (None, 'fit'):
-            if Path(self.train_dump_path).exists() and not self.force_format:
+            if Path(self.train_dump_path).exists() and not self.force_process:
                 print("Loading the training data")
                 train_val_set = torch.load(self.train_dump_path)
             else:
                 print("Processing the training data")
                 train_val_json = self.read_json(self.train_json_path)
-                # TODO: Check self.process_data_fast
                 data = self.process_data(train_val_json)
                 train_val_set = TaxoBERTDataset(*data)
                 save_path = Path(self.train_dump_path)
@@ -367,13 +312,12 @@ class TaxoBERTDataModule(pl.LightningDataModule):
             )
 
         if stage in (None, 'test'):
-            if Path(self.test_dump_path).exists() and not self.force_format:
+            if Path(self.test_dump_path).exists() and not self.force_process:
                 print("Loading the test data")
                 self.test_set = torch.load(self.test_dump_path)
             else:
                 print("Processing the test data")
                 test_json = self.read_json(self.test_json_path)
-                # TODO: Check self.process_data_fast
                 data = self.process_data(test_json)
                 self.test_set = TaxoBERTDataset(*data)
                 save_path = Path(self.test_dump_path)
@@ -381,36 +325,104 @@ class TaxoBERTDataModule(pl.LightningDataModule):
                 torch.save(self.test_set, save_path)
 
     def collate_fn(self, batch):
+        # Extract inputs and targets
         x, y = list(zip(*batch))
-        lists = list(zip(*x))
+        enc_lists = [[torch.as_tensor(enc) for enc in seq] for seq in zip(*x)]
+
+        # Randomly sample sequences
+        if self.max_synsets and self.max_lemmas:
+            sampled_enc_lists = []
+
+            for seq in zip(*enc_lists):
+                # Initialize sampled indices with those of the base level
+                samples = torch.nonzero(
+                    seq[self.enc_to_id["level_ids"]]
+                    == self.level_to_id[("current", "current")],
+                    as_tuple=True
+                )[0]
+
+                for level_id in list(self.level_to_id.values())[1:]:
+
+                    # Sample some synsets
+                    level_mask = seq[self.enc_to_id["level_ids"]] == level_id
+                    level_synsets = seq[
+                        self.enc_to_id["synset_ids"]
+                    ][level_mask].unique()
+                    kept_synsets = choose(self.max_synsets, level_synsets)
+
+                    # Sample lemmas in those synsets
+                    for synset_id in kept_synsets:
+                        synset_mask = seq[self.enc_to_id["synset_ids"]] \
+                            == synset_id
+                        synset_lemmas = seq[
+                            self.enc_to_id["lemma_ids"]
+                        ][synset_mask].unique()
+                        kept_lemmas = choose(self.max_lemmas, synset_lemmas)
+                        lemma_indices = where_in(
+                            seq[self.enc_to_id["lemma_ids"]], kept_lemmas
+                        )
+                        samples = torch.cat((samples, lemma_indices.flatten()))
+
+                # Keep the sampled encodings
+                new_seq = [
+                    seq[index][samples.long()]
+                    for index in self.enc_to_id.values()
+                ]
+                sampled_enc_lists.append(new_seq)
+
+            enc_lists = sampled_enc_lists
+
+        # Flatten targets of the batch
         y = list(itertools.chain.from_iterable(y))
-        padded = [pad_sequence(item, batch_first=True, padding_value=0) for item in lists]
+
+        # Pad encodings (really do pad them all with 0's?)
+        padded = [
+            pad_sequence(
+                encs,
+                batch_first=True,
+                padding_value=0
+            ) for encs in enc_lists
+        ]
+
         return padded, padded[0].new_tensor(y)
 
     def train_dataloader(self):
-        return DataLoader(self.train_set, batch_size=self.batch_size, collate_fn=self.collate_fn)
+        return DataLoader(
+            self.train_set,
+            batch_size=self.batch_size,
+            collate_fn=self.collate_fn
+        )
 
     def val_dataloader(self):
-        return DataLoader(self.val_set, batch_size=self.batch_size, collate_fn=self.collate_fn)
+        return DataLoader(
+            self.val_set,
+            batch_size=self.batch_size,
+            collate_fn=self.collate_fn
+        )
 
     def test_dataloader(self):
-        return DataLoader(self.test_set, batch_size=self.batch_size, collate_fn=self.collate_fn)
+        return DataLoader(
+            self.test_set,
+            batch_size=self.batch_size,
+            collate_fn=self.collate_fn
+        )
 
 
 if __name__ == "__main__":
-    # For debugging purpose
-    dm = TaxoBERTDataModule(force_format=True)
+    dm = TaxoBERTDataModule(force_process=True)
     dm.prepare_data()
     dm.setup("test")
-
+    batch = next(iter(dm.test_dataloader()))
     torch.set_printoptions(profile="full")
-    max_len = 50
 
-    it = next(iter(dm.test_dataloader()))
-    print(dm.tokenizer.convert_ids_to_tokens(it[0][0][0])[:max_len])
-    print("*" * 20)
-    for item in it[0]:
-        print(item[0][:max_len])
-        print("*" * 20)
-
-    print("Target:", it[1])
+    print("*" * 80)
+    print("Tokens:")
+    print(" ".join(dm.tokenizer.convert_ids_to_tokens(batch[0][0][0])))
+    id_to_enc = {i: e for e, i in dm.enc_to_id.items()}
+    for i_enc, enc in enumerate(batch[0][0]):
+        print("*" * 80)
+        print(id_to_enc[i_enc])
+        print(enc)
+    print("*" * 80)
+    print("Batch target:")
+    print(batch[1])

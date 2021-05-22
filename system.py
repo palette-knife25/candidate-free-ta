@@ -37,7 +37,7 @@ class CandidateFreeTE(pl.LightningModule):
 		return loss
 
 	def training_step(self, train_batch, batch_idx):
-		(token_ids, type_ids, synset_ids, highway), gt_ids = train_batch
+		(token_ids, type_ids, synset_ids, _, highway), gt_ids = train_batch
 		log_probs = self.forward(token_ids, type_ids, synset_ids, highway)
 		gt_mask = token_ids == self.mask_token_id
 
@@ -47,7 +47,7 @@ class CandidateFreeTE(pl.LightningModule):
 		return {'loss': loss}
 
 	def validation_step(self, val_batch, batch_idx):
-		(token_ids, type_ids, synset_ids, highway), gt_ids = val_batch
+		(token_ids, type_ids, synset_ids, _, highway), gt_ids = val_batch
 		log_probs = self.forward(token_ids, type_ids, synset_ids, highway)
 		gt_mask = token_ids == self.mask_token_id
 
