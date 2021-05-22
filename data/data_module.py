@@ -16,13 +16,13 @@ from tqdm import tqdm
 from transformers import BertTokenizerFast
 
 
-# TODO: Update URL
-URL = "https://www.dropbox.com/s/jcx2ld4jw5tbvrb/taxo_bert_test3K.zip?dl=1"
+URL = "https://www.dropbox.com/s/2j9h1yyi8tb6l1w/graph_relations.zip?dl=1"
 JSON_PATH = "./json"
 DUMP_PATH = "./dumps"
 TRAIN_JSON_NAME = "train_graph_relations_bert_3K_rel.json"
 TEST_JSON_NAME = "test_graph_relations_bert_3K_rel.json"
 TRAIN_DUMP_NAME = "train.pth"
+VAL_DUMP_NAME = "val.pth"
 TEST_DUMP_NAME = "test.pth"
 
 LEVEL_TO_ID = {
@@ -109,6 +109,23 @@ class TaxoBERTDataset(Dataset):
         return inp, target
 
 
+class TaxoBERTDatasetTrain(TaxoBERTDataset):
+    def __init__(self, token_ids, level_ids, synset_ids, lemma_ids, is_highway, target_ids, mask_token_id):
+        super().__init__(token_ids, level_ids, synset_ids, lemma_ids, is_highway, target_ids)
+        self.mask_token_id = mask_token_id
+
+    def __getitem__(self, item):
+        random_lemma = torch.randint(len(self.target_ids[item]), (1, )).item()
+        n_masks = len(self.target_ids[item][random_lemma])
+        inp = ([self.mask_token_id] * n_masks + self.token_ids[item],
+               [0] * n_masks + self.level_ids[item],
+               [0] * n_masks + self.synset_ids[item],
+               [0] * n_masks + self.lemma_ids[item],
+               [True] * n_masks + self.is_highway[item])
+        target = self.target_ids[item][random_lemma]
+        return inp, target
+
+
 class TaxoBERTDataModule(pl.LightningDataModule):
     """
     A PyTorch Lighting data module for TaxoBERT.
@@ -145,6 +162,7 @@ class TaxoBERTDataModule(pl.LightningDataModule):
         self.train_json_path = os.path.join(self.json_path, TRAIN_JSON_NAME)
         self.test_json_path = os.path.join(self.json_path, TEST_JSON_NAME)
         self.train_dump_path = os.path.join(data_root, DUMP_PATH, TRAIN_DUMP_NAME)
+        self.val_dump_path = os.path.join(data_root, DUMP_PATH, VAL_DUMP_NAME)
         self.test_dump_path = os.path.join(data_root, DUMP_PATH, TEST_DUMP_NAME)
 
         self.level_to_id = LEVEL_TO_ID
@@ -166,9 +184,6 @@ class TaxoBERTDataModule(pl.LightningDataModule):
         )
 
         if not has_all_files:
-            # TODO: Upload files somewhere
-            raise FileNotFoundError("Files still not uploaded")
-
             # Download the archive
             print("Downloading the data")
             r = requests.get(URL, stream=True)
@@ -217,43 +232,33 @@ class TaxoBERTDataModule(pl.LightningDataModule):
         for synset in tqdm(json_dict.values()):
             token_ids = []
             level_ids = []
-            synset_ids = []
-            lemma_ids = []
+            synset_ids = [0]
+            lemma_ids = [0]
             is_highway = []
 
             lemmas = [l.replace("_", " ") for l in synset["lemmas"]]
             abs_level = ("current", "current")
 
-            # Set the synset's lemma that is on highway as target
-            highway_lemma = lemmas.pop(0)
-            highway_token_ids = tokenize([highway_lemma])
-            all_targets.append(highway_token_ids)
-            n_tokens = len(highway_token_ids)
-
-            # Replace it by a mask
-            token_ids.extend([self.tokenizer.mask_token_id] * n_tokens)
-            level_ids.extend([self.level_to_id[abs_level]] * n_tokens)
-            synset_ids.extend([0] * n_tokens)
-            lemma_ids.extend([0] * n_tokens)
-            is_highway.extend([True] * n_tokens)
-
-            # Add the synset's other lemmas
-            for lemma in lemmas:
-                add_lemma(lemma, abs_level, 0, False)
+            # Save all lemmas of the current node
+            synset_token_ids = self.tokenizer.batch_encode_plus(lemmas,
+                                                                add_special_tokens=False,
+                                                                return_token_type_ids=False).input_ids
+            all_targets.append(synset_token_ids)
 
             for level in ("hypernyms", "hyponyms"):
                 for sub_synset in synset[level].values():
-                    lemmas = [l.replace("_", " ") for l in sub_synset["lemmas"]]
-                    abs_level = (level, "current")
-                    synset_id = synset_ids[-1] + 1
+                    if "lemmas" in sub_synset:
+                        lemmas = [l.replace("_", " ") for l in sub_synset["lemmas"]]
+                        abs_level = (level, "current")
+                        synset_id = synset_ids[-1] + 1
 
-                    # Add the synset's lemma that is on highway
-                    highway_lemma = lemmas.pop(0)
-                    add_lemma(highway_lemma, abs_level, synset_id, True)
+                        # Add the synset's lemma that is on highway
+                        highway_lemma = lemmas.pop(0)
+                        add_lemma(highway_lemma, abs_level, synset_id, True)
 
-                    # Add the synset's other lemmas
-                    for lemma in lemmas:
-                        add_lemma(lemma, abs_level, synset_id, False)
+                        # Add the synset's other lemmas
+                        for lemma in lemmas:
+                            add_lemma(lemma, abs_level, synset_id, False)
 
                     for sub_level in ("hypernyms", "hyponyms"):
                         for sub_sub_lemmas in sub_synset[sub_level].values():
@@ -272,8 +277,8 @@ class TaxoBERTDataModule(pl.LightningDataModule):
             # Append the global lists
             all_token_ids.append(token_ids)
             all_level_ids.append(level_ids)
-            all_synset_ids.append(synset_ids)
-            all_lemma_ids.append(lemma_ids)
+            all_synset_ids.append(synset_ids[1:])
+            all_lemma_ids.append(lemma_ids[1:])
             all_is_highway.append(is_highway)
 
         data = (
@@ -292,24 +297,26 @@ class TaxoBERTDataModule(pl.LightningDataModule):
         if stage in (None, 'fit'):
             if Path(self.train_dump_path).exists() and not self.force_process:
                 print("Loading the training data")
-                train_val_set = torch.load(self.train_dump_path)
+                self.train_set = torch.load(self.train_dump_path)
+                self.val_set = torch.load(self.val_dump_path)
             else:
                 print("Processing the training data")
                 train_val_json = self.read_json(self.train_json_path)
                 data = self.process_data(train_val_json)
-                train_val_set = TaxoBERTDataset(*data)
+                # Use a part of the training set as validation set
+                full_len = len(data[0])
+                val_share = int(self.val_ratio * full_len)
+                torch.manual_seed(0)
+                indices_order = torch.randperm(full_len)
+                self.train_set = TaxoBERTDatasetTrain(*[[item for i, item in enumerate(data_list)
+                                                         if i in indices_order[:-val_share]] for data_list in data],
+                                                      self.tokenizer.mask_token_id)
+                self.val_set = TaxoBERTDataset(*[[item for i, item in enumerate(data_list)
+                                                  if i in indices_order[-val_share:]] for data_list in data])
                 save_path = Path(self.train_dump_path)
                 save_path.parent.mkdir(parents=True, exist_ok=True)
-                torch.save(train_val_set, save_path)
-
-            # Use a part of the training set as validation set
-            full_len = len(train_val_set)
-            val_share = int(self.val_ratio * full_len)
-            split = [full_len - val_share, val_share]
-            self.train_set, self.val_set = random_split(
-                train_val_set,
-                split,
-            )
+                torch.save(self.train_set, save_path)
+                torch.save(self.val_set, Path(self.val_dump_path))
 
         if stage in (None, 'test'):
             if Path(self.test_dump_path).exists() and not self.force_process:
@@ -370,10 +377,11 @@ class TaxoBERTDataModule(pl.LightningDataModule):
                 ]
                 sampled_enc_lists.append(new_seq)
 
-            enc_lists = sampled_enc_lists
+            enc_lists = list(zip(*sampled_enc_lists))
 
         # Flatten targets of the batch
-        y = list(itertools.chain.from_iterable(y))
+        if type(y[0][0]) is not list:
+            y = torch.as_tensor(list(itertools.chain.from_iterable(y)))
 
         # Pad encodings (really do pad them all with 0's?)
         padded = [
@@ -384,7 +392,7 @@ class TaxoBERTDataModule(pl.LightningDataModule):
             ) for encs in enc_lists
         ]
 
-        return padded, padded[0].new_tensor(y)
+        return padded, y
 
     def train_dataloader(self):
         return DataLoader(

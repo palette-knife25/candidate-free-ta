@@ -20,6 +20,8 @@ class ExperimentConfig:
 
     base_model: str = 'bert-base-uncased'
     type_embedding_max: int = 7
+    max_tokens_lemma: int = 5
+    top_k: int = 10
 
 @dataclass
 class Config:
