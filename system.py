@@ -5,7 +5,7 @@ import torchmetrics
 import torch
 from torch import nn
 from torch.nn import functional as F
-from models import KBertEnricher
+from models import KBertEnricher, KBertGATEnricher
 from itertools import chain
 from metrics import PrecisionK, MeanAveragePrecision
 from metrics.mrr import build_match_matrix, MeanReciprocalRank
@@ -17,7 +17,10 @@ class CandidateFreeTE(pl.LightningModule):
 		self.opt = opt
 		self.tokenizer = tokenizer
 		self.mask_token_id = self.tokenizer.mask_token_id
-		self.net = KBertEnricher(opt.base_model, opt.type_embedding_max)
+		if opt.model_type=='kbertgat':
+			self.net = KBertGATEnricher(opt.base_model, opt.type_embedding_max, opt.gat_n_heads, opt.gat_hidden_size, opt.bert_encoder)
+		else:
+			self.net = KBertEnricher(opt.base_model, opt.type_embedding_max)
 		self.val_metrics = {"ValidationMRR": MeanReciprocalRank(),
 							"ValidationPrecision@10": PrecisionK(),
 							"ValidationMAP": MeanAveragePrecision()}
