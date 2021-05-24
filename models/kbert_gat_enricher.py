@@ -46,10 +46,10 @@ class GraphAttentionLayer(nn.Module):
         N = Wh.size()[1]  # number of nodes (a.k.a. seq_len)
         bs = Wh.size()[0]  # batch size
 
-        Wh_repeated_in_chunks = Wh.repeat_interleave(N, dim=1)  # Wh_repeated_in_chunks.shape: (bs, N * N, out_features)
-        Wh_repeated_alternating = Wh.repeat(1, N, 1)  # Wh_repeated_alternating.shape: (bs, N * N, out_features)
+        # Wh_repeated_in_chunks = Wh.repeat_interleave(N, dim=1)  # Wh_repeated_in_chunks.shape: (bs, N * N, out_features)
+        # Wh_repeated_alternating = Wh.repeat(1, N, 1)  # Wh_repeated_alternating.shape: (bs, N * N, out_features)
 
-        all_combinations_matrix = torch.cat([Wh_repeated_in_chunks, Wh_repeated_alternating], dim=2)  # all_combinations_matrix.shape: (bs, N * N, 2 * out_features)
+        all_combinations_matrix = torch.cat([Wh.repeat_interleave(N, dim=1), Wh.repeat(1, N, 1)], dim=2)  # all_combinations_matrix.shape: (bs, N * N, 2 * out_features)
 
         return all_combinations_matrix.view(bs, N, N, 2 * self.out_features)
 
