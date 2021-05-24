@@ -113,9 +113,13 @@ class KBertGATEnricher(nn.Module):
                 embedding_output,
                 attention_mask=attn_mask.float()).last_hidden_state
 
-            log_probs = self.gat(hidden_state, attn_mask=attn_mask.squeeze(1).float())
+            graph_visibility_mask = build_graph_mask(type_ids, synset_ids, highway)
+            graph_attn_mask = graph_visibility_mask[:, None, :, :] & not_padding_mask[:, None, None, :]  # b x 1 x seq_len x seq_len
+            log_probs = self.gat(hidden_state, attn_mask=graph_attn_mask.squeeze(1).float())
         else:
-            log_probs = self.gat(embedding_output, attn_mask=attn_mask.squeeze(1).float())
+            graph_visibility_mask = build_graph_mask(type_ids, synset_ids, highway)
+            graph_attn_mask = graph_visibility_mask[:, None, :, :] & not_padding_mask[:, None, None, :]  # b x 1 x seq_len x seq_len
+            log_probs = self.gat(embedding_output, attn_mask=graph_attn_mask.squeeze(1).float())
 
         return log_probs  # b x seq_len x vocab_size
 
@@ -141,4 +145,26 @@ class TaxoEmbedding(nn.Module):
 def build_visibility_mask(synset_ids, highway):
     visibility_mask = synset_ids.unsqueeze(-1) == synset_ids.unsqueeze(-2)
     visibility_mask |= highway.unsqueeze(-1) & highway.unsqueeze(-2)
+    return visibility_mask
+
+def build_graph_mask(type_ids, synset_ids, highway):
+    # The assumed graph rules are:
+    # everyone see each other inside one synset
+    # only highways see other highways, with following rules (see Andreea's scheme for reference):
+    #   type 1 and type 0 see each other
+    #   type 1 and type 2 see each other
+    #   type 1 and type 5 see each other
+    #   type 3 and type 6 see each other
+    #   type 3 and type 4 see each other
+    #   type 3 and type 0 see each other
+
+    visibility_mask = synset_ids.unsqueeze(-1) == synset_ids.unsqueeze(-2)
+
+    visibility_mask |= ((type_ids == 1) & highway).unsqueeze(-1) & ((type_ids == 0) & highway).unsqueeze(-2)
+    visibility_mask |= ((type_ids == 1) & highway).unsqueeze(-1) & ((type_ids == 2) & highway).unsqueeze(-2)
+    visibility_mask |= ((type_ids == 1) & highway).unsqueeze(-1) & ((type_ids == 5) & highway).unsqueeze(-2)
+    visibility_mask |= ((type_ids == 3) & highway).unsqueeze(-1) & ((type_ids == 6) & highway).unsqueeze(-2)
+    visibility_mask |= ((type_ids == 3) & highway).unsqueeze(-1) & ((type_ids == 4) & highway).unsqueeze(-2)
+    visibility_mask |= ((type_ids == 3) & highway).unsqueeze(-1) & ((type_ids == 0) & highway).unsqueeze(-2)
+
     return visibility_mask
