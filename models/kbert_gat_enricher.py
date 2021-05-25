@@ -66,7 +66,8 @@ class GAT(nn.Module):
         for i, attention in enumerate(self.attentions):
             self.add_module('attention_{}'.format(i), attention)
 
-        self.out_att = GraphAttentionLayer(nhid*nheads, nclass, dropout=dropout, alpha=alpha, concat=False)
+        # self.out_att = GraphAttentionLayer(nhid*nheads, nclass, dropout=dropout, alpha=alpha, concat=False)  # replaced in order to fit in memory
+        self.out_layer = nn.Linear(nhid * nheads, nclass)
 
     def forward(self, x, attn_mask):
         # x.shape: (bs, seq_len, nfeat)
@@ -75,7 +76,8 @@ class GAT(nn.Module):
         x = F.dropout(x, self.dropout, training=self.training)
         x = torch.cat([att(x, attn_mask) for att in self.attentions], dim=2)
         x = F.dropout(x, self.dropout, training=self.training)
-        x = F.elu(self.out_att(x, attn_mask))
+        #x = F.elu(self.out_att(x, attn_mask))  # replaced in order to fit in memory
+        x = F.elu(self.out_layer(x))
 
         # final x.shape: (bs, seq_len, nclass)
         return F.log_softmax(x, dim=1)
