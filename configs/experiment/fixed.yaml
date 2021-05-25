@@ -1,0 +1,22 @@
+# @package experiment
+name: "fixed"
+system: FixedTESystem
+trainer_args:
+  gpus: 1
+  max_epochs: 20
+  gradient_clip_val: 1.0
+dataset:
+  _target_: data.TaxoBERTDataModule
+  tokenizer:
+    _target_: models.FixedTokenizer
+  data_root: ${experiment.data_root}/newset
+  batch_size: 64
+  num_workers: 2
+optimizer: Adam
+optimizer_args:
+  lr: 0.0002
+scheduler: StepLR
+scheduler_args:
+  step_size: 20
+  gamma: 0.5
+

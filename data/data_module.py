@@ -13,7 +13,7 @@ from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data.dataloader import DataLoader
 from torch.utils.data.dataset import Dataset, random_split
 from tqdm import tqdm
-from transformers import BertTokenizerFast
+from hydra.utils import instantiate
 
 
 URL = "https://www.dropbox.com/s/2j9h1yyi8tb6l1w/graph_relations.zip?dl=1"
@@ -52,7 +52,7 @@ def where_in(a, b):
     :param b: torch.tensor, query tensor
     :return: torch.tensor, indices where values of b were found in a
     """
-    return (a[..., None] == b).any(-1).nonzero().squeeze()
+    return torch.nonzero((a[..., None] == b).any(-1)).squeeze()
 
 
 def choose(n, a):
@@ -143,12 +143,14 @@ class TaxoBERTDataModule(pl.LightningDataModule):
     """
     def __init__(
         self,
+        tokenizer,
         batch_size: int = 32,
         val_ratio: float = 0.1,
         max_synsets: int = 3,
         max_lemmas: int = 3,
         force_process: bool = False,
         data_root: str = "./",
+        num_workers: int = 0,
     ):
         super().__init__()
 
@@ -157,6 +159,7 @@ class TaxoBERTDataModule(pl.LightningDataModule):
         self.force_process = force_process
         self.max_synsets = max_synsets
         self.max_lemmas = max_lemmas
+        self.num_workers = num_workers
 
         self.json_path = os.path.join(data_root, JSON_PATH)
         self.train_json_path = os.path.join(self.json_path, TRAIN_JSON_NAME)
@@ -168,7 +171,7 @@ class TaxoBERTDataModule(pl.LightningDataModule):
         self.level_to_id = LEVEL_TO_ID
         self.enc_to_id = ENC_TO_ID
 
-        self.tokenizer = BertTokenizerFast.from_pretrained('bert-base-uncased')
+        self.tokenizer = instantiate(tokenizer)
 
     @staticmethod
     def read_json(path: str):
@@ -398,39 +401,47 @@ class TaxoBERTDataModule(pl.LightningDataModule):
         return DataLoader(
             self.train_set,
             batch_size=self.batch_size,
-            collate_fn=self.collate_fn
+            collate_fn=self.collate_fn,
+            num_workers=self.num_workers,
+            shuffle=True,
+            pin_memory=True
         )
 
     def val_dataloader(self):
         return DataLoader(
             self.val_set,
             batch_size=self.batch_size,
-            collate_fn=self.collate_fn
+            collate_fn=self.collate_fn,
+            num_workers=self.num_workers,
+            pin_memory=True
         )
 
     def test_dataloader(self):
         return DataLoader(
             self.test_set,
             batch_size=self.batch_size,
-            collate_fn=self.collate_fn
+            collate_fn=self.collate_fn,
+            num_workers=self.num_workers,
+            pin_memory=True
         )
 
 
 if __name__ == "__main__":
-    dm = TaxoBERTDataModule(force_process=True)
+    dm = TaxoBERTDataModule(force_process=True, batch_size=4)
     dm.prepare_data()
     dm.setup("test")
     batch = next(iter(dm.test_dataloader()))
     torch.set_printoptions(profile="full")
 
+    bidx = 2
     print("*" * 80)
     print("Tokens:")
-    print(" ".join(dm.tokenizer.convert_ids_to_tokens(batch[0][0][0])))
+    print(" ".join(dm.tokenizer.convert_ids_to_tokens(batch[0][0][bidx])))
     id_to_enc = {i: e for e, i in dm.enc_to_id.items()}
-    for i_enc, enc in enumerate(batch[0][0]):
+    for i_enc, enc in enumerate(batch[0]):
         print("*" * 80)
         print(id_to_enc[i_enc])
-        print(enc)
+        print(enc[bidx])
     print("*" * 80)
     print("Batch target:")
     print(batch[1])

@@ -18,6 +18,7 @@ class ExperimentConfig:
     scheduler: Optional[str] = 'ExponentialLR'
     scheduler_args: Any = defaulter({})
 
+    system: str = "CandidateFreeTE"
     base_model: str = 'bert-base-uncased'
     type_embedding_max: int = 7
     max_tokens_lemma: int = 5
