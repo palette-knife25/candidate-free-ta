@@ -13,21 +13,24 @@ class ExperimentConfig:
     
     trainer_args: Any = defaulter({'max_epochs': 30, 'profiler': None})
     dataset: Any = defaulter({})
-    optimizer: str = 'Adam'
-    optimizer_args: Any = defaulter({'lr': 0.001})
-    scheduler: Optional[str] = 'ExponentialLR'
-    scheduler_args: Any = defaulter({})
+    optimizer: Any = defaulter({
+        '_target_': 'torch.optim.Adam',
+        'lr': 0.001
+    })
+    scheduler: Any = None
 
     system: str = "CandidateFreeTE"
-    base_model: str = 'bert-base-uncased'
-    type_embedding_max: int = 7
     max_tokens_lemma: int = 5
     top_k: int = 10
 
-    model_type: str = 'kbert'  # kbertgat/kbert
-    gat_n_heads: int = 4
-    gat_hidden_size: int = 128
-    bert_encoder: bool = True
+    net: Any = defaulter({
+        '_target_': "models.KBertEnricher",
+        'type_embedding_max': 7
+    })
+    # model_type: str = 'kbert'  # kbertgat/kbert
+    # gat_n_heads: int = 4
+    # gat_hidden_size: int = 128
+    # bert_encoder: bool = True
 
 @dataclass
 class Config:

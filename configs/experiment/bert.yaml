@@ -1,0 +1,24 @@
+# @package experiment
+name: "bert"
+system: CandidateFreeTE
+trainer_args:
+  gpus: 1
+  max_epochs: 5
+  gradient_clip_val: 1.0
+dataset:
+  _target_: data.TaxoBERTDataModule
+  tokenizer:
+    _target_: models.BertFastTokenizer
+  data_root: ${experiment.data_root}
+  batch_size: 32
+net:
+  _target_: models.KBertEnricher
+  base_model: 'bert-base-uncased'
+optimizer:
+  _target_: torch.optim.Adam
+scheduler:
+  _target_: torch.optim.lr_scheduler.OneCycleLR
+  epochs: ${experiment.trainer_args.max_epochs}
+  steps_per_epoch: 1000
+  max_lr: 0.001
+  pct_start: 0.2

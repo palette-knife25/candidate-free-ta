@@ -1,5 +1,5 @@
 # @package experiment
-name: "bert"
+name: "example"
 trainer_args:
   max_epochs: 5
   gradient_clip_val: 1.0

@@ -1,5 +1,5 @@
 # @package experiment
-name: "fixed"
+name: "fixed_refactored"
 system: FixedTESystem
 trainer_args:
   gpus: 1
@@ -12,11 +12,13 @@ dataset:
   data_root: ${experiment.data_root}/newset
   batch_size: 64
   num_workers: 2
-optimizer: Adam
-optimizer_args:
+net:
+  _target_: models.FixedEnricher
+optimizer:
+  _target_: torch.optim.Adam
   lr: 0.0002
-scheduler: StepLR
-scheduler_args:
+scheduler:
+  _target_: torch.optim.lr_scheduler.StepLR
   step_size: 20
   gamma: 0.5
 
