@@ -1,14 +1,14 @@
 import torch
 from torch import nn
-from transformers import BertModel
+from transformers import BertForMaskedLM
 
 
 class KBertEnricher(nn.Module):
-	def __init__(self, base_model, type_embedding_max):
+	def __init__(self, base_model, type_embedding_max, freeze_head=True):
 		super().__init__()
-		pretrained_bert = BertModel.from_pretrained(base_model)
-		bert_config = pretrained_bert.config
-		input_embedding = pretrained_bert.embeddings.word_embeddings
+		pretrained_bert_mlm = BertForMaskedLM.from_pretrained(base_model)
+		bert_config = pretrained_bert_mlm.bert.config
+		input_embedding = pretrained_bert_mlm.bert.embeddings.word_embeddings
 		input_embedding.weight.requires_grad = False
 		self.embedding = TaxoEmbedding(
 			input_embedding,
@@ -17,8 +17,11 @@ class KBertEnricher(nn.Module):
 			bert_config.max_position_embeddings,
 			bert_config.hidden_dropout_prob
 		)
-		self.encoder = pretrained_bert.encoder
-		self.head = nn.Linear(bert_config.hidden_size, bert_config.vocab_size)
+		self.encoder = pretrained_bert_mlm.bert.encoder
+		self.head = pretrained_bert_mlm.cls.predictions
+		if freeze_head:
+			for param_group in self.head.parameters():
+				param_group.requires_grad = False
 
 	def forward(self, token_ids, type_ids, synset_ids, highway):
 		visibility_mask = build_visibility_mask(synset_ids, highway)  # b x seq_len x seq_len
