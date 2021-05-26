@@ -80,7 +80,7 @@ class GAT(nn.Module):
         x = F.elu(self.out_layer(x))
 
         # final x.shape: (bs, seq_len, nclass)
-        return F.log_softmax(x, dim=1)
+        return F.log_softmax(x, dim=-1)
 
 
 class KBertGATEnricher(nn.Module):
