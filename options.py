@@ -27,10 +27,8 @@ class ExperimentConfig:
         '_target_': "models.KBertEnricher",
         'type_embedding_max': 7
     })
-    # model_type: str = 'kbert'  # kbertgat/kbert
-    # gat_n_heads: int = 4
-    # gat_hidden_size: int = 128
-    # bert_encoder: bool = True
+
+    evaluate_dl: str = "test_dataloader"
 
 @dataclass
 class Config:
