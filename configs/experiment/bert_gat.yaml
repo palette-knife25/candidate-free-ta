@@ -18,6 +18,7 @@ net:
   gat_n_heads: 4
   gat_hidden_size: 32
   bert_encoder: True
+  freeze_embedding: True
 optimizer:
   _target_: torch.optim.Adam
 scheduler:

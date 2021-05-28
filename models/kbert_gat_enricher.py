@@ -84,12 +84,12 @@ class GAT(nn.Module):
 
 
 class KBertGATEnricher(nn.Module):
-    def __init__(self, base_model, type_embedding_max, gat_n_heads, gat_hidden_size, bert_encoder=True):
+    def __init__(self, base_model, type_embedding_max, gat_n_heads, gat_hidden_size, bert_encoder=True, freeze_embedding=True):
         super().__init__()
         pretrained_bert = BertModel.from_pretrained(base_model)
         bert_config = pretrained_bert.config
         input_embedding = pretrained_bert.embeddings.word_embeddings
-        input_embedding.weight.requires_grad = False
+        input_embedding.weight.requires_grad = ~freeze_embedding
         self.embedding = TaxoEmbedding(
             input_embedding,
             bert_config.hidden_size,

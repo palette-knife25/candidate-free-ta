@@ -14,6 +14,9 @@ dataset:
 net:
   _target_: models.KBertEnricher
   base_model: 'bert-base-uncased'
+  use_pretrained_encoder: True
+  use_pretrained_head: True
+  freeze_head: True
 optimizer:
   _target_: torch.optim.Adam
 scheduler:
