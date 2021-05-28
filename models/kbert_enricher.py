@@ -1,10 +1,12 @@
 import torch
 from torch import nn
 from transformers import BertForMaskedLM
+from transformers.models.bert.modeling_bert import BertEncoder, BertLMPredictionHead
 
 
 class KBertEnricher(nn.Module):
-	def __init__(self, base_model, type_embedding_max, freeze_head=True):
+	def __init__(self, base_model, type_embedding_max,
+				 use_pretrained_encoder=True, use_pretrained_head=True, freeze_head=True):
 		super().__init__()
 		pretrained_bert_mlm = BertForMaskedLM.from_pretrained(base_model)
 		bert_config = pretrained_bert_mlm.bert.config
@@ -17,8 +19,14 @@ class KBertEnricher(nn.Module):
 			bert_config.max_position_embeddings,
 			bert_config.hidden_dropout_prob
 		)
-		self.encoder = pretrained_bert_mlm.bert.encoder
-		self.head = pretrained_bert_mlm.cls.predictions
+		if use_pretrained_encoder:
+			self.encoder = pretrained_bert_mlm.bert.encoder
+		else:
+			self.encoder = BertEncoder(bert_config)
+		if use_pretrained_head:
+			self.head = pretrained_bert_mlm.cls.predictions
+		else:
+			self.head = BertLMPredictionHead(bert_config)
 		if freeze_head:
 			for param_group in self.head.parameters():
 				param_group.requires_grad = False
