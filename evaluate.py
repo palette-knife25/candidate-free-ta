@@ -10,10 +10,11 @@ import systems
 def evaluate(opt: ExperimentConfig):
 	dm: pl.LightningDataModule = instantiate(opt.dataset)
 	dm.setup()
-	model = getattr(systems, opt.system)(opt, dm.tokenizer)
-
+	model = getattr(systems, opt.system).load_from_checkpoint(opt.trainer_args.resume_from_checkpoint,
+															  opt=opt, tokenizer=dm.tokenizer)
 	trainer = pl.Trainer(logger=None, default_root_dir="./", **opt.trainer_args)
 	trainer.validate(model, val_dataloaders=getattr(dm, opt.evaluate_dl)())
+
 
 
 @hydra.main(config_path="configs", config_name="config")
