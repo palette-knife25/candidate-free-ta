@@ -89,7 +89,7 @@ class KBertGATEnricher(nn.Module):
         pretrained_bert = BertModel.from_pretrained(base_model)
         bert_config = pretrained_bert.config
         input_embedding = pretrained_bert.embeddings.word_embeddings
-        input_embedding.weight.requires_grad = ~freeze_embedding
+        input_embedding.weight.requires_grad = not freeze_embedding
         self.embedding = TaxoEmbedding(
             input_embedding,
             bert_config.hidden_size,
